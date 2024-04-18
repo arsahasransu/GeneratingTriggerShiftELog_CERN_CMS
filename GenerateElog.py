@@ -1,9 +1,6 @@
 from prettytable import PrettyTable
 
 import requests
-import tsgauth
-
-auth = tsgauth.oidcauth.KerbSessionAuth(use_auth_file=True)
 
 def TTAdd(time, text, indent=0):
     return "    "*indent + "[" + time + "] " +  text + "\n"
@@ -22,7 +19,37 @@ def ER(time, run):
     text += "====================================\n"
     return text
 
-def RunSAdd(tkey, lhcstat, ss, tss):
+def RunSAdd(tkey, ps, lhcstat, ss, tss):
+    text = "    - Configuration: \n"
+    text += "        - LHC status: " + str(lhcstat) + "\n"
+    text += "        - Trigger Key: " + str(tkey) + "\n"
+    text += "        - Prescale column: " + str(ps) + "\n"
+    text += "        - Subsystems: " + str(ss) + "\n"
+    text += "        - TRG subsystems: " + str(tss) + "\n"
+    return text
+
+def RunCAdd(time, text):
+    return '\n' + TTAdd(time, text, 1)
+
+def RateSAdd(phys, rand, tot, deadtime, strmphys, strmexp):
+
+    pt = PrettyTable()
+    pt.field_names = ["Rate", "Value"]
+    pt.header = False
+    pt.add_row(['Total L1A rate', str(tot) + "Hz"])
+    pt.add_row(['L1A physics', str(phys) + "Hz"])
+    pt.add_row(['L1A random', str(rand) + "Hz"])
+    pt.add_row(['Stream physics', str(strmphys) +"Hz"])
+    pt.add_row(['Stream express', str(strmexp) + "Hz"])
+    pt.add_row(['Dead time', str(deadtime) + " %"])
+    pt.align = 'l'
+    table_string = pt.get_string()
+    table_string = '\n'.join('    ' + line for line in table_string.split('\n'))
+    table_string += '\n'
+
+    return table_string
+
+def RunSAddNew(auth, tkey, lhcstat, ss, tss):
     text = "    - Configuration: \n"
     text += "        - LHC status: " + str(lhcstat) + "\n"
     text += "        - Trigger Key: " + str(tkey) + "\n"
@@ -30,39 +57,7 @@ def RunSAdd(tkey, lhcstat, ss, tss):
     text += "        - TRG subsystems: " + str(tss) + "\n"
     return text
 
-def AddNewRun(runnr, cmnt):
-
-    fieldsRunQuery = "start_time,end_time,hlt_key"
-    omsRunQuery = f"https://cmsoms.cern.ch/agg/api/v1/runs?"
-    omsRunQuery += f"page[offset]=0&"
-    omsRunQuery += f"page[limit]=1&"
-    omsRunQuery += f"filter[sequence][EQ]=GLOBAL-RUN&"
-    omsRunQuery += f"filter[run_number][EQ]={runnr}&"
-    omsRunQuery += f"fields={fieldsRunQuery}&"
-    omsRunQuery += f"sort=-run_number"
-    
-    omsRunRequest = requests.get(omsRunQuery, **auth.authparams(), verify=False)
-    orq = omsRunRequest.json()
-
-    stime = orq['data'][0]['attributes']['start_time']
-    etime = orq['data'][0]['attributes']['end_time']
-    tkey = orq['data'][0]['attributes']['hlt_key']
-    lhcstat = cmnt['lhcstatus']
-    ss = cmnt['subsystems']
-    tss = cmnt['trgsubsystems']
-
-    runelogtext = BR(stime, runnr)
-    runelogtext += RunSAdd(tkey, lhcstat, ss, tss)
-
-    for item in cmnt['measure_rate']:
-        runelogtext += RunCAdd(item['time'], item['text'])
-        runelogtext +=RateSAdd(runnr, item['lsnr'], item['ps'])
-
-    runelogtext += ER(etime, runnr)
-
-    return runelogtext
-
-def RateSAdd(runnr, lsnr, ps):
+def RateSAddNew(auth, runnr, lsnr, ps):
     pt = PrettyTable()
     pt.field_names = ["Rate", "Value"]
     pt.header = False
@@ -134,6 +129,35 @@ def RateSAdd(runnr, lsnr, ps):
     out_string += table_string
     return out_string
 
-def RunCAdd(time, text):
-    return '\n' + TTAdd(time, text, 1)
+def AddNewRun(runnr, auth, cmnt):
+
+    fieldsRunQuery = "start_time,end_time,hlt_key"
+    omsRunQuery = f"https://cmsoms.cern.ch/agg/api/v1/runs?"
+    omsRunQuery += f"page[offset]=0&"
+    omsRunQuery += f"page[limit]=1&"
+    omsRunQuery += f"filter[sequence][EQ]=GLOBAL-RUN&"
+    omsRunQuery += f"filter[run_number][EQ]={runnr}&"
+    omsRunQuery += f"fields={fieldsRunQuery}&"
+    omsRunQuery += f"sort=-run_number"
+    
+    omsRunRequest = requests.get(omsRunQuery, **auth.authparams(), verify=False)
+    orq = omsRunRequest.json()
+
+    stime = orq['data'][0]['attributes']['start_time']
+    etime = orq['data'][0]['attributes']['end_time']
+    tkey = orq['data'][0]['attributes']['hlt_key']
+    lhcstat = cmnt['lhcstatus']
+    ss = cmnt['subsystems']
+    tss = cmnt['trgsubsystems']
+
+    runelogtext = BR(stime, runnr)
+    runelogtext += RunSAddNew(auth, tkey, lhcstat, ss, tss)
+
+    for item in cmnt['measure_rate']:
+        runelogtext += RunCAdd(item['time'], item['text'])
+        runelogtext += RateSAddNew(auth, runnr, item['lsnr'], item['ps'])
+
+    runelogtext += ER(etime, runnr)
+
+    return runelogtext
 
