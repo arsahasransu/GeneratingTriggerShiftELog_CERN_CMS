@@ -1,5 +1,6 @@
 from prettytable import PrettyTable
 
+import re
 import requests
 
 def TTAdd(time, text, indent=0):
@@ -8,14 +9,14 @@ def TTAdd(time, text, indent=0):
 def TAdd(text, indent=0):
     return "    "*(indent+1) + "- " + text + "\n"
 
-def BR(time, run):
+def BR(time, run, summary):
     text = "\n====================================\n"
-    text += TTAdd(time, "Run " + str(run) + " started.\n\n")
+    text += TTAdd(str(time), "Run " + str(run) + " started: " + summary + ".\n\n")
     return text
 
 def ER(time, run):
     text = '\n'
-    text += TTAdd(time, "Run " + str(run) + " stopped.")
+    text += TTAdd(str(time), "Run " + str(run) + " stopped.")
     text += "====================================\n"
     return text
 
@@ -36,11 +37,11 @@ def RateSAdd(phys, rand, tot, deadtime, strmphys, strmexp):
     pt = PrettyTable()
     pt.field_names = ["Rate", "Value"]
     pt.header = False
-    pt.add_row(['Total L1A rate', str(tot) + "Hz"])
-    pt.add_row(['L1A physics', str(phys) + "Hz"])
-    pt.add_row(['L1A random', str(rand) + "Hz"])
-    pt.add_row(['Stream physics', str(strmphys) +"Hz"])
-    pt.add_row(['Stream express', str(strmexp) + "Hz"])
+    pt.add_row(['Total L1A rate', rate_units(tot)])
+    pt.add_row(['L1A physics', rate_units(phys)])
+    pt.add_row(['L1A random', rate_units(rand)])
+    pt.add_row(['Stream physics', rate_units(strmphys)])
+    pt.add_row(['Stream express', rate_units(strmexp)])
     pt.add_row(['Dead time', str(deadtime) + " %"])
     pt.align = 'l'
     table_string = pt.get_string()
@@ -49,7 +50,7 @@ def RateSAdd(phys, rand, tot, deadtime, strmphys, strmexp):
 
     return table_string
 
-def RunSAddNew(auth, tkey, lhcstat, ss, tss):
+def RunSAddNew(tkey, lhcstat, ss, tss):
     text = "    - Configuration: \n"
     text += "        - LHC status: " + str(lhcstat) + "\n"
     text += "        - Trigger Key: " + str(tkey) + "\n"
@@ -76,9 +77,9 @@ def RateSAddNew(auth, runnr, lsnr, ps):
     omsL1tRateRequest = requests.get(omsL1tRateQuery, **auth.authparams(), verify=False)
     orl1tq = omsL1tRateRequest.json()
 
-    tot = orl1tq['data'][0]['attributes']['l1a_total']
-    phys = orl1tq['data'][0]['attributes']['l1a_physics']
-    rand = orl1tq['data'][0]['attributes']['l1a_random']
+    tot = orl1tq['data'][0]['attributes']['l1a_total']['rate']
+    phys = orl1tq['data'][0]['attributes']['l1a_physics']['rate']
+    rand = orl1tq['data'][0]['attributes']['l1a_random']['rate']
 
     fieldsStreamRateQuery = "stream_name,rate"
     omsStreamRateQuery = f"https://cmsoms.cern.ch/agg/api/v1/streams?"
@@ -112,13 +113,13 @@ def RateSAddNew(auth, runnr, lsnr, ps):
 
     omsDTRequest = requests.get(omsDTQuery, **auth.authparams(), verify=False)
     odtq = omsDTRequest.json()
-    deadtime = odtq['data'][0]['attributes']['overall_total_deadtime']
+    deadtime = odtq['data'][0]['attributes']['overall_total_deadtime']['percent']
 
-    pt.add_row(['Total L1A rate', str(tot) + "Hz"])
-    pt.add_row(['L1A physics', str(phys) + "Hz"])
-    pt.add_row(['L1A random', str(rand) + "Hz"])
-    pt.add_row(['Stream physics', str(strmphys) +"Hz"])
-    pt.add_row(['Stream express', str(strmexp) + "Hz"])
+    pt.add_row(['Total L1A rate', rate_units(tot)])
+    pt.add_row(['L1A physics', rate_units(phys)])
+    pt.add_row(['L1A random', rate_units(rand)])
+    pt.add_row(['Stream physics', rate_units(strmphys)])
+    pt.add_row(['Stream express', rate_units(strmexp)])
     pt.add_row(['Dead time', str(deadtime) + " %"])
     pt.align = 'l'
     table_string = pt.get_string()
@@ -131,7 +132,9 @@ def RateSAddNew(auth, runnr, lsnr, ps):
 
 def AddNewRun(runnr, auth, cmnt):
 
-    fieldsRunQuery = "start_time,end_time,hlt_key"
+    print('Gathering OMS query data for run ' + str(runnr) + '...')
+
+    fieldsRunQuery = "start_time,end_time,l1_hlt_mode_stripped"
     omsRunQuery = f"https://cmsoms.cern.ch/agg/api/v1/runs?"
     omsRunQuery += f"page[offset]=0&"
     omsRunQuery += f"page[limit]=1&"
@@ -144,20 +147,39 @@ def AddNewRun(runnr, auth, cmnt):
     orq = omsRunRequest.json()
 
     stime = orq['data'][0]['attributes']['start_time']
+    stimeHM = re.findall(r'\d{2}:\d{2}', stime)[0]
+    stimeHM = utc_to_local(stimeHM)
     etime = orq['data'][0]['attributes']['end_time']
-    tkey = orq['data'][0]['attributes']['hlt_key']
+    etime = etime if etime is not None else '[21:00]'
+    etimeHM = re.findall(r'\d{2}:\d{2}', etime)[0]
+    etimeHM = utc_to_local(etimeHM)
+    tkey = orq['data'][0]['attributes']['l1_hlt_mode_stripped']
     lhcstat = cmnt['lhcstatus']
     ss = cmnt['subsystems']
     tss = cmnt['trgsubsystems']
 
-    runelogtext = BR(stime, runnr)
-    runelogtext += RunSAddNew(auth, tkey, lhcstat, ss, tss)
+    runelogtext = BR(stimeHM, runnr, cmnt['summary'])
+    runelogtext += RunSAddNew(tkey, lhcstat, ss, tss)
 
     for item in cmnt['measure_rate']:
         runelogtext += RunCAdd(item['time'], item['text'])
         runelogtext += RateSAddNew(auth, runnr, item['lsnr'], item['ps'])
 
-    runelogtext += ER(etime, runnr)
+    runelogtext += ER(etimeHM, runnr)
 
     return runelogtext
 
+def rate_units(inval):
+    if inval < 1e3:
+        return str(round(inval, 2)) + ' Hz'
+    elif inval < 1e6:
+        return str(round(inval, 0)/1e3) + ' kHz'
+    else:
+        return str(round(inval, 0)/1e6) + ' MHz'
+    
+def utc_to_local(t):
+    h = int(t.split(':')[0])
+    h = h+2
+    if h >= 24:
+        h = h - 24
+    return str(h) + ':' + t.split(':')[1]
